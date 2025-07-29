@@ -7,7 +7,8 @@ teachers = [
     'Teachers/Lev_Tauz.jpg',
     'Teachers/Professor_Dolecek.jpg',
     'Teachers/Professor_Roberts.jpg',
-    'Teachers/Samuel_Li.jpg'
+    'Teachers/Samuel_Li.jpg',
+    'Teachers/Josh_Hyman.jpg'
 ]
 
 def bits_to_symbol_indices(bits, num_symbols):

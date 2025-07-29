@@ -8,7 +8,8 @@ teachers = {
     'lev tauz': 'Teachers/Lev_Tauz.jpg',
     'professor dolecek': 'Teachers/Professor_Dolecek.jpg',
     'professor roberts': 'Teachers/Professor_Roberts.jpg',
-    'samuel li': 'Teachers/Samuel_Li.jpg'
+    'samuel li': 'Teachers/Samuel_Li.jpg',
+    'josh hyman': 'Teachers/Josh_Hyman.jpg'
 }
 
 def digital_modulation(bits, M):

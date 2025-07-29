@@ -13,6 +13,7 @@ teachers_dict = {
     'lev tauz': 'Teachers/Lev_Tauz.jpg',
     'professor dolecek': 'Teachers/Professor_Dolecek.jpg',
     'professor roberts': 'Teachers/Professor_Roberts.jpg',
+    'josh hyman': 'Teachers/Josh_Hyman.jpg'
 }
 
 def digital_modulation(bits, num_symbols):

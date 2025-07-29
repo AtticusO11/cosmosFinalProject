@@ -2,113 +2,119 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from adi import Pluto
-from reedsolo import RSCodec
+import reedsolo
 
-# Load grayscale image and flatten to bytes
-img = cv2.imread('Teachers/Ethan_Ge.jpg', cv2.IMREAD_GRAYSCALE)
-if img is None:
-    raise FileNotFoundError("Could not load image at 'Teachers/Ethan_Ge.jpg'")
-img_shape = img.shape
-img_bytes = img.flatten()
+# Reed-Solomon codec with 64 parity symbols
+rsc = reedsolo.RSCodec(64)
 
-# Simple 4-PAM: map each byte to 4 symbols (2 bits each)
-def bytes_to_symbols(data):
-    symbols = []
-    for b in data:
-        symbols.append((b >> 6) & 0b11)
-        symbols.append((b >> 4) & 0b11)
-        symbols.append((b >> 2) & 0b11)
-        symbols.append(b & 0b11)
-    return np.array(symbols)
-def rs_encode(data_str, nsym=4):
-    rs = reedsolo.RSCodec(nsym)
-    return rs.encode(bytearray(data_str, 'utf-8'))
+def digital_modulation(img_path, sdr_uri="usb:0"):
+    # Load grayscale image
+    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise FileNotFoundError(f"Could not load image at '{img_path}'")
+    print(f"Loaded image shape: {img.shape}")
 
-def rs_decode(encoded_bytes):
-    rs = RSCodec(4)  # Use same nsym as encoding (4)
-    # decode returns just the decoded message bytes (may return tuple with 1 element)
-    decoded_bytes = rs.decode(encoded_bytes)
-    if isinstance(decoded_bytes, tuple):  # sometimes returns (msg,)
-        decoded_bytes = decoded_bytes[0]
-    return decoded_bytes
+    img_bytes = img.flatten()
+    print(f"Original image bytes length: {len(img_bytes)}")
 
-symbols = bytes_to_symbols(img_bytes)
+    # Encode image bytes with Reed-Solomon
+    print("Encoding image with Reed-Solomon...")
+    encoded = rsc.encode(img_bytes.tobytes())
+    print(f"Encoded length: {len(encoded)} bytes")
 
-# Map 4-PAM symbols {0,1,2,3} to amplitude levels {-3, -1, 1, 3}
-pam_levels = np.array([-3, -1, 1, 3])
-tx_symbols = pam_levels[symbols]
+    # Prepare transmission samples (center around 0 and normalize)
+    tx_data = np.frombuffer(encoded, dtype=np.uint8).astype(np.float32) - 127.5
+    tx_data /= 127.5
+    tx_samples = tx_data + 0j
 
-# Upsample (repeat each symbol 10 times)
-upsample_factor = 10
-tx_waveform = np.repeat(tx_symbols, upsample_factor)
+    try:
+        print("Initializing PlutoSDR for transmission...")
+        sdr = Pluto(sdr_uri)
+        sdr.sample_rate = int(2e6)
+        sdr.tx_rf_bandwidth = int(2e6)
+        sdr.tx_lo = int(915e6)
+        sdr.tx_cyclic_buffer = False
 
-# Normalize to max amplitude range for PlutoSDR (-1 to 1)
-tx_waveform = tx_waveform / np.max(np.abs(tx_waveform))
+        print("Transmitting...")
+        sdr.tx(tx_samples)
+        print("Transmission done.")
+        return sdr, img, len(encoded)  # Return Pluto instance to keep alive, image, and encoded length
 
-# Create complex baseband signal (I = waveform, Q = 0)
-tx_samples = tx_waveform.astype(np.float32) + 1j * np.zeros_like(tx_waveform)
+    except Exception as e:
+        print(f"PlutoSDR not found or error: {e}")
+        print("Falling back to simulated loopback...")
+        sdr = None
+        return sdr, img, len(encoded), tx_samples  # Return tx_samples for simulated RX
 
-# Initialize PlutoSDR for TX/RX
-sdr = Pluto("usb:0.9.5")
-sdr.tx_lo = int(435e6)
-sdr.tx_sample_rate = int(2.048e6)
-sdr.tx_rf_bandwidth = int(2e6)
-sdr.tx_cyclic_buffer = False
 
-sdr.rx_lo = sdr.tx_lo
-sdr.rx_sample_rate = sdr.tx_sample_rate
-sdr.rx_rf_bandwidth = sdr.tx_rf_bandwidth
-sdr.rx_buffer_size = len(tx_samples)
+def digital_demodulation(sdr, img_shape, encoded_len, tx_samples=None):
+    if sdr is not None:
+        try:
+            sdr.rx_lo = sdr.tx_lo
+            sdr.rx_rf_bandwidth = int(2e6)
+            sdr.rx_buffer_size = encoded_len
+            print("Receiving...")
+            rx_samples = sdr.rx()
+            print("Reception done.")
+            sdr.tx_destroy_buffer()
+            del sdr
 
-print("Starting transmission...")
-sdr.tx(tx_samples)
-print("Transmission done.")
+            received_real = np.real(rx_samples)
+            received_bytes = np.clip((received_real * 127.5) + 127.5, 0, 255).astype(np.uint8)
 
-print("Starting reception...")
-rx_samples = sdr.rx()
-print("Reception done.")
+        except Exception as e:
+            print(f"Error during reception: {e}")
+            return None
 
-# Extract real part (I) as symbols (ignore Q for PAM)
-rx_waveform = rx_samples.real
+    else:
+        # Use simulated loopback
+        print("Simulated reception (loopback)...")
+        received_bytes = np.clip((np.real(tx_samples) * 127.5) + 127.5, 0, 255).astype(np.uint8)
 
-# Downsample by factor 10 (match upsample_factor)
-downsample_factor = 10
-rx_samples_ds = rx_waveform[::downsample_factor]
+    print(f"Received bytes length: {len(received_bytes)}")
 
-# Demap 4-PAM
-pam_levels = np.array([-3, -1, 1, 3])
-symbols_rx = np.argmin(np.abs(rx_samples_ds[:, None] - pam_levels[None, :]), axis=1)
+    # Decode with Reed-Solomon
+    print("Decoding received bytes with Reed-Solomon...")
+    try:
+        decoded_bytes = rsc.decode(received_bytes.tobytes())
+        if isinstance(decoded_bytes, tuple):
+            decoded_bytes = decoded_bytes[0]
+        print("Decoding successful.")
+    except reedsolo.ReedSolomonError as e:
+        print(f"Reed-Solomon decoding failed: {e}")
+        # Show raw received bytes as fallback
+        decoded_bytes = received_bytes[:img_shape[0] * img_shape[1]].tobytes()
 
-def symbols_to_bytes(symbols):
-    bytes_out = []
-    for i in range(0, len(symbols), 4):
-        if i+3 >= len(symbols):
-            break
-        b = (symbols[i] << 6) | (symbols[i+1] << 4) | (symbols[i+2] << 2) | symbols[i+3]
-        bytes_out.append(b)
-    return np.array(bytes_out, dtype=np.uint8)
+    recovered_img = np.frombuffer(decoded_bytes, dtype=np.uint8).reshape(img_shape)
+    return recovered_img
 
-received_bytes = symbols_to_bytes(symbols_rx)
 
-# Recover original image
-img_recovered = received_bytes[:img_shape[0]*img_shape[1]].reshape(img_shape)
+if __name__ == "__main__":
+    image_path = "Teachers/Ethan_Ge.jpg"
+    sdr_uri = "usb:0"  # Change as needed
 
-# Show recovered image
-plt.figure(figsize=(10, 5))
+    # Modulate and transmit
+    sdr, img, encoded_len, *extra = digital_modulation(image_path, sdr_uri)
+    tx_samples = extra[0] if extra else None
 
-plt.subplot(1, 2, 1)
-plt.imshow(img, cmap='gray')
-plt.title("Original Image")
-plt.axis('off')
+    # Receive and demodulate
+    recovered_img = digital_demodulation(sdr, img.shape, encoded_len, tx_samples)
 
-plt.subplot(1, 2, 2)
-plt.imshow(img_recovered, cmap='gray')
-plt.title("Recovered Image")
-plt.axis('off')
+    # Display images
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    plt.imshow(img, cmap='gray')
+    plt.title("Original Image")
+    plt.axis('off')
 
-plt.tight_layout()
-plt.show()
+    plt.subplot(1, 2, 2)
+    if recovered_img is not None:
+        plt.imshow(recovered_img, cmap='gray')
+        plt.title("Recovered Image")
+    else:
+        plt.text(0.5, 0.5, 'No image received', ha='center', va='center')
+        plt.title("Recovered Image")
+    plt.axis('off')
 
-# Cleanup
-sdr.tx_destroy_buffer()
-del sdr
+    plt.tight_layout()
+    plt.show()

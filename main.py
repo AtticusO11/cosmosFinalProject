@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from collections import Counter
 
 # digital modulation
 def digital_modulation(bits, M):
@@ -64,9 +65,6 @@ def plot_m_t(t, m_t):
 
 
 # digital demodulation
-import numpy as np
-from collections import Counter
-
 def demodulation(m_t, M, samples_per_symbol, original_bit_length):
     symbols_found = []
     for i in range(0, len(m_t), samples_per_symbol):

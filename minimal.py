@@ -5,7 +5,8 @@ teachers = [
     ('Lev Tauz', 'Teachers/Lev_Tauz.jpg'),
     ('Professor Dolecek', 'Teachers/Professor_Dolecek.jpg'),
     ('Professor Roberts', 'Teachers/Professor_Roberts.jpg'),
-    ('Samuel Li', 'Teachers/Samuel_Li.jpg')
+    ('Samuel Li', 'Teachers/Samuel_Li.jpg'),
+    ('Josh Hyman', 'Teachers/Josh_Hyman.jpg')
 ]
 
 def digital_modulation(num_symbols):

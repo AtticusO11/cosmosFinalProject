@@ -1,3 +1,5 @@
+''' Returns flattened, encoded, and encrypted RGB pixel bits of the image '''
+
 import cv2 as cv
 import numpy as np
 
@@ -57,3 +59,25 @@ def chunk(bit_list):
 
 # test: chunked RGB pixels sent pixel by pixel, truncated to first 32 values
 chunked_values = chunk(bit_list)
+
+
+''' Returns decoded and decrypted image pixels and unflattens/reshapes them'''
+def unchunk(chunked_values):
+    unchunked_values = [bit for chunk in chunked_values for bit in chunk]
+
+    return unchunked_values
+
+unchunked_values = unchunk(chunked_values)
+
+def decrypt_decimal(unchunked_values):
+    pixel_values = np.array([int(b, 2) for b in unchunked_values], dtype = np.uint16)
+
+    decrypted = (pixel_values - 7) % 256
+    decrypted = decrypted.astype(np.uint8)
+
+    return decrypted
+
+decrypted = decrypt_decimal(unchunked_values)
+
+# rechunked values
+reconstructed_img = decrypted.reshape(original_shape)

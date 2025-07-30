@@ -3,6 +3,9 @@ import cv2 as cv
 from collections import Counter
 import matplotlib.pyplot as plt
 
+# choose a file!
+filename = "Teachers/Josh_Hyman.jpg"
+
 def encrypt_pixels(filename):
     img = cv.imread(filename, cv.IMREAD_COLOR)
 
@@ -29,8 +32,7 @@ def encrypt_pixels(filename):
     return cipherpixels, shape
 
 
-filename = "Teachers/Lev_Tauz.jpg"
-pixels, original_shape = encrypt_pixels("Teachers/Lev_Tauz.jpg")
+pixels, original_shape = encrypt_pixels(filename)
 
 
 def convert_to_bits(pixels):
@@ -165,9 +167,9 @@ def modulate_pixels(pixels, M, samples_per_symbol):
     t, m_t = create_message(all_symbols, samples_per_symbol)
     return t, m_t, len(pixels) * bits_per_pixel
 
+# demod for reshape later
 def demodulate_pixels(m_t, M, samples_per_symbol, original_bit_length):
     final_bits = demodulation(m_t, M, samples_per_symbol, original_bit_length)
-
     pixels = []
     for i in range(0, len(final_bits), 24):
         pixel_bits = final_bits[i:i+24]
@@ -190,9 +192,6 @@ def plot_m_t(t, m_t):
     plt.ylabel("Symbol Value")
     plt.grid(True)
 
-    plt.savefig("message_plot.png")
-    print("Plot saved as message_plot.png")
-
     plot = plt.show()
 
     return plot
@@ -214,18 +213,14 @@ for i, pixel_chunk in enumerate(chunked_values):
     if i >= N:
         break
 
-    # Flatten 3 bytes (strings of bits) into a single bit list for modulation
-    bits = ''.join(pixel_chunk)  # e.g. '011001010101111101100100' (24 bits for 1 RGB pixel)
+    bits = ''.join(pixel_chunk)
     bit_list = [int(b) for b in bits]
 
-    # Modulate this pixel's bits
     symbols = digital_modulation(bit_list, M)
     t, m_t = create_message(symbols, sps)
 
-    # Demodulate back
     recovered_bits = demodulation(m_t, M, sps, len(bit_list))
 
-    # Convert bits back to RGB channels (8 bits each)
     pixel = []
     for j in range(0, len(recovered_bits), 8):
         byte = recovered_bits[j:j+8]
@@ -233,9 +228,7 @@ for i, pixel_chunk in enumerate(chunked_values):
 
     received_pixels.append(pixel)
 
-# Convert list to numpy array for reshaping or viewing
 received_pixels_np = np.array(received_pixels, dtype=np.uint8)
-
 
 
 symbols = digital_modulation(message, M)
@@ -255,3 +248,12 @@ if ''.join(str(b) for b in message) == final:
 
 
 plot_m_t(t, m_t)
+
+
+original_img = cv.imread(filename, cv.IMREAD_COLOR)
+
+# show original & reconstructed images
+combined = cv.hconcat([original_img, reconstructed_img])
+cv.imshow("Image Comparison", combined)
+cv.waitKey(0)
+cv.destroyAllWindows()

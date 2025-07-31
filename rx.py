@@ -29,48 +29,41 @@ os.chdir(Path(__file__).parent)
 # ---------------------------------------------------------------
 fs = 5e6  # baseband sampling rate (samples per second)
 sps = 1
-# Size of the image to transmit, need to be the same for both TX and RX
+# Size of the image to transmit, needs to be the same for both TX and RX
 IMAGE_SIZE = (32, 32)
 
 # ---------------------------------------------------------------
 # Create shared system configuration
 # ---------------------------------------------------------------
-config = SystemConfiguration.from_file(Path(__file__).parent / "system_config.json")
+config = SystemConfiguration.from_file(Path(__file__).parent / "tx_config.json")
 modulation_order = config.modulation_order
 
-rx_sdr = Pluto("usb:1.8.5")  # Uncomment to use different device
+# ---------------------------------------------------------------
+# Initialize receiver SDR and system
+# ---------------------------------------------------------------
+rx_sdr = Pluto("usb:1.8.5")  # change to your Pluto device
 rx = DigitalReceiver(config, rx_sdr)
 rx.set_gain(30)
 
-# Set RF bandwidth
-# tx.tx_rf_bandwidth = rx.rx_rf_bandwidth = int(tx.sample_rate / config.sps) * 2
-
 # ---------------------------------------------------------------
-# Prepare data to transmit
+# Prepare modulation parameters and image
 # ---------------------------------------------------------------
-# Digital modulation parameters
-
 constellation = get_qam_constellation(modulation_order, Es=1)
 
 # Load and prepare image
-img = Image.open(Path(__file__).parent /"Teachers/Ethan_Ge.jpg")
+img = Image.open(Path(__file__).parent / "Teachers/Ethan_Ge.jpg")
 img = img.resize(IMAGE_SIZE)
 img = np.array(img)
 bits = np.unpackbits(img)
 
-# Map bits to symbols
+# Map bits to symbols (same as TX to compare)
 tx_syms, padding = qam_mapper(bits, constellation)
 num_transmit_symbols = len(tx_syms)
 print("Number of transmit symbols: ", num_transmit_symbols)
 
-# Shuffle symbols if desired
-# shuffler = np.random.default_rng().permutation(num_transmit_symbols)
-# transmit_symbols_shuffled = transmit_symbols[shuffler]
-
-tx_syms_shuffled = tx_syms
-
-
+# ---------------------------------------------------------------
 # Receive signal
+# ---------------------------------------------------------------
 print("Receiving signal...")
 receive_signal = rx.receive_signal()
 
@@ -78,16 +71,13 @@ print("=" * 60)
 # ---------------------------------------------------------------
 # Process received signal
 # ---------------------------------------------------------------
-# The receiver already handles pulse shaping, timing sync, frequency sync, and channel equalization
-# So receive_signal contains the equalized symbols ready for demodulation
 rx_syms = receive_signal
 print("Number of receive symbols: ", len(rx_syms))
 
 # Associate received symbols with nearest in constellation
 det_rx_syms_shuffled = demod_nearest(rx_syms, constellation)
 
-# Unshuffle received symbols
-# detected_receive_symbols = detected_receive_symbols_shuffled[np.argsort(shuffler)]
+# Unshuffle received symbols (if shuffled on TX, do the inverse here)
 det_rx_syms = det_rx_syms_shuffled
 
 # Demap symbols to bits
@@ -105,14 +95,10 @@ print("Bit error rate: ", ber)
 # ---------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------
-# Plot transmitted and received signals and symbols
 fig = plt.figure(figsize=(12, 6))
 
-# Top subplot for real symbols
 ax1 = plt.subplot2grid((2, 2), (0, 0), colspan=1)
-ax1.plot(
-    np.real(tx_syms_shuffled), color="blue", marker="o", label="Real Transmit Symbols"
-)
+ax1.plot(np.real(tx_syms), color="blue", marker="o", label="Real Transmit Symbols")
 ax1.plot(np.real(rx_syms), color="red", label="Real Receive Symbols")
 ax1.set_title("Transmit and Receive Symbols (Real)")
 ax1.set_xlabel("Symbol Index")
@@ -120,14 +106,8 @@ ax1.set_ylabel("Amplitude")
 ax1.grid(True)
 ax1.legend()
 
-# Bottom subplot for imaginary symbols
 ax2 = plt.subplot2grid((2, 2), (1, 0), colspan=1)
-ax2.plot(
-    np.imag(tx_syms_shuffled),
-    color="blue",
-    marker="o",
-    label="Imaginary Transmit Symbols",
-)
+ax2.plot(np.imag(tx_syms), color="blue", marker="o", label="Imaginary Transmit Symbols")
 ax2.plot(np.imag(rx_syms), color="red", label="Imaginary Receive Symbols")
 ax2.set_title("Transmit and Receive Symbols (Imaginary)")
 ax2.set_xlabel("Symbol Index")
@@ -135,20 +115,9 @@ ax2.set_ylabel("Amplitude")
 ax2.grid(True)
 ax2.legend()
 
-# Right side square subplot for symbols
 ax3 = plt.subplot2grid((2, 2), (0, 1), rowspan=2, aspect="equal")
-ax3.scatter(
-    np.real(rx_syms),
-    np.imag(rx_syms),
-    color="red",
-    label="Received Symbols",
-)
-ax3.scatter(
-    np.real(tx_syms),
-    np.imag(tx_syms),
-    color="blue",
-    label="Transmitted Symbols",
-)
+ax3.scatter(np.real(rx_syms), np.imag(rx_syms), color="red", label="Received Symbols")
+ax3.scatter(np.real(tx_syms), np.imag(tx_syms), color="blue", label="Transmitted Symbols")
 ax3.set_title("Transmitted and Received Symbols")
 ax3.set_xlabel("Real Component")
 ax3.set_ylabel("Imaginary Component")
@@ -170,16 +139,10 @@ plt.tight_layout()
 plt.show()
 
 # ---------------------------------------------------------------
-# Demonstrate separate TX/RX usage
+# Print receiver and config info
 # ---------------------------------------------------------------
 print("\n" + "=" * 60)
-print("DEMONSTRATING SEPARATE TX/RX OPERATION")
-print("=" * 60)
-
-# Example: Using transmitter and receiver independently
-
-
-print("\nReceiver configuration:")
+print("Receiver configuration:")
 print(f"  Sample rate: {rx.config.sample_rate/1e6:.1f} MHz")
 print(f"  Samples per symbol: {rx.config.sps}")
 print(f"  Carrier frequency: {rx.config.carrier_frequency/1e6:.0f} MHz")
@@ -191,4 +154,18 @@ print(f"  STF symbols: {config.num_stf_symbols}")
 print(f"  LTF symbols: {config.num_ltf_symbols}")
 print(f"  Pilot symbols: {config.n_pilot_syms}")
 
-# %%
+# ---------------------------------------------------------------
+# Explicit cleanup to avoid iio NoneType errors on exit
+# ---------------------------------------------------------------
+try:
+    rx.close()  # Close the DigitalReceiver (if method exists)
+except AttributeError:
+    pass
+
+try:
+    rx_sdr.close()  # Close the Pluto SDR device (if method exists)
+except AttributeError:
+    pass
+
+del rx
+del rx_sdr

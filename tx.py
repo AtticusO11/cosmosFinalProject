@@ -1,17 +1,12 @@
-# transmitter.py
 import os
-import time
 from pathlib import Path
-
 import numpy as np
 from PIL import Image
 from comms_lib.dsp import get_qam_constellation, qam_mapper
 from comms_lib.pluto import Pluto
 from comms_lib.system3 import DigitalTransmitter, SystemConfiguration
 
-# ---------------------------------------------------------------
-# Country to Flag Path Dictionary
-# ---------------------------------------------------------------
+# Flags dictionary (your original one)
 flags_dict = {
     'albania': 'Flags/Albania.png',
     'andorra': 'Flags/Andorra.png',
@@ -61,67 +56,64 @@ flags_dict = {
     'uk': 'Flags/United_Kingdom.jpg',
 }
 
-# ---------------------------------------------------------------
-# Ask for country
-# ---------------------------------------------------------------
-print("What country in Europe do you want to transmit? (Press Enter to skip):")
-country = input("> ").strip().lower()
-
-if country not in flags_dict:
-    print(f"Country '{country}' not found in dictionary.")
-    exit()
-
-img_path = flags_dict[country]
-if not os.path.exists(img_path):
-    print(f"Image path does not exist: {img_path}")
-    exit()
-
-print(f"Loading flag of {country} from {img_path}...")
-
-# ---------------------------------------------------------------
-# Load and prepare image
-# ---------------------------------------------------------------
+# System parameters
+fs = 5e6
+sps = 1
 IMAGE_SIZE = (32, 32)
-img = Image.open(img_path).convert("RGB").resize(IMAGE_SIZE)
-img = np.array(img)
-bits = np.unpackbits(img)
+CHUNK_SIZE = 4000  # symbols per chunk
 
-# ---------------------------------------------------------------
-# Communication Parameters
-# ---------------------------------------------------------------
-carrier_freq = 2.4e9  # Hz
-sample_rate = 5e6     # Hz
-sps = 1               # samples per symbol
-mod_order = 16        # QAM modulation order
-
-# Prepare system config
-config = SystemConfiguration.default()
-config.sample_rate = sample_rate
+# Create system config and save to file
+modulation_order = 16
+config = SystemConfiguration(
+    modulation_order=modulation_order,
+    n_pilot_syms=1500,
+    seed=123456,
+)
+config.sample_rate = fs
 config.sps = sps
-config.modulation_order = mod_order
-config.carrier_frequency = carrier_freq
-config.save_to_file("tx_config.json")
+config.save_to_file(Path(__file__).parent / "tx_config.json")
 
-# QAM Modulation
-constellation = get_qam_constellation(mod_order, Es=1)
-tx_syms, padding = qam_mapper(bits, constellation)
-
-# ---------------------------------------------------------------
-# Transmit
-# ---------------------------------------------------------------
-tx_sdr = Pluto("usb:1.4.5")  # Update with correct SDR ID
+# Setup SDR and transmitter
+tx_sdr = Pluto("usb:0.4.5")
 tx = DigitalTransmitter(config, tx_sdr)
 tx.set_gain(100)
 
-print(f"Transmitting {len(tx_syms)} symbols for {country.upper()}...")
-tx.transmit_signal(tx_syms)
-print("Done.")
+def transmit_in_chunks(tx_obj, symbols, chunk_size):
+    num_symbols = len(symbols)
+    for start_idx in range(0, num_symbols, chunk_size):
+        end_idx = min(start_idx + chunk_size, num_symbols)
+        chunk = symbols[start_idx:end_idx]
+        print(f"Transmitting symbols {start_idx} to {end_idx-1}...")
+        tx_obj.transmit_signal(chunk)
+    print("Transmission complete.")
 
-# Cleanup
-try: tx.close()
-except: pass
-try: tx_sdr.close()
-except: pass
+print("What country in Europe do you want to visit? (Press Enter to quit)")
 
-del tx
-del tx_sdr
+while True:
+    country = input("> ").strip().lower()
+    if country == "":
+        break
+
+    if country not in flags_dict:
+        print(f"No image found for '{country}'")
+        continue
+
+    img_path = flags_dict[country]
+    if not os.path.exists(img_path):
+        print(f"Image file not found for '{country}' at {img_path}")
+        continue
+
+    # Load image, resize and convert to bits
+    img = Image.open(img_path).resize(IMAGE_SIZE)
+    img = np.array(img)
+    bits = np.unpackbits(img)
+
+    # Modulate bits
+    constellation = get_qam_constellation(modulation_order, Es=1)
+    tx_syms, padding = qam_mapper(bits, constellation)
+    print(f"Loaded '{country}', total symbols to transmit: {len(tx_syms)}")
+
+    # Transmit in chunks
+    transmit_in_chunks(tx, tx_syms, CHUNK_SIZE)
+
+print("All done. Goodbye!")

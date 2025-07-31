@@ -42,6 +42,27 @@ flags_dict = {
     'italy': 'Flags/Italy.png',
     'kosovo': 'Flags/Kosovo.png',
     'north macedonia': 'Flags/North_Macedonia.png',
+    'latvia': 'Flags/Latvia.jpg',
+    'lithuania': 'Flags/lithuania.jpg',
+    'malta': 'Flags/Malta.jpg',
+    'moldova': 'Flags/Moldova.jpg',
+    'monaco': 'Flags/Monaco.jpg',
+    'montenegro': 'Flags/Montenegro.jpg',
+    'netherlands': 'Flags/Netherlands.jpg',
+    'poland': 'Flags/Polad.jpg',
+    'portugal': 'Flags/Portugal.jpg',
+    'romania': 'Flags/Romania.jpg',
+    'russia': 'Flags/Russia.jpg',
+    'san marino': 'Flags/San_Marino.jpg',
+    'serbia': 'Flags/serbia.jpg',
+    'slovakia': 'Flags/Slovakia.jpg',
+    'slovenia': 'Flags/Slovenia.jpg',
+    'spain': 'Flags/Spain.jpg',
+    'sweden': 'Flags/Sweden.jpg',
+    'switzerland': 'Flags/Switzerland.jpg',
+    'turkey': 'Flags/turkey.jpg',
+    'ukraine': 'Flags/Ukraine.jpg',
+    'uk': 'Flags/United_Kingdom.jpg',
     
 }
 
@@ -69,7 +90,7 @@ while True:
         img_path = flags_dict[name]
 
         if not os.path.exists(img_path):
-            print(f"⚠️ Image file not found for {name}")
+            print(f"Image file not found for {name}")
             continue
 
         img = Image.open(img_path).convert("RGB")
@@ -106,6 +127,19 @@ while True:
         print(f"Transmission done in {time.time() - start_time:.2f} sec")
 
         received_symbols = np.concatenate(received_chunks)
+        # Plot symbol levels vs. time (before and after transmission)
+        plt.figure(figsize=(12, 5))
+
+        plt.plot(symbols[:1000], label="Original Symbols", alpha=0.7)
+        plt.plot(received_symbols[:1000].real, label="Received Symbols (Real)", alpha=0.7)
+        plt.title("Symbol Levels vs. Time (First 1000 Symbols)")
+        plt.xlabel("Symbol Index")
+        plt.ylabel("Amplitude")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+
         received_bits = digital_demodulation(received_symbols)[:len(bits)]
         received_bytes = np.packbits(received_bits, bitorder='big')
         if len(received_bytes) < flat_rgb.size:

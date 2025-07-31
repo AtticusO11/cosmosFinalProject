@@ -60,7 +60,7 @@ flags_dict = {
 fs = 5e6
 sps = 1
 IMAGE_SIZE = (32, 32)
-CHUNK_SIZE = 4000  # symbols per chunk
+CHUNK_SIZE = 100  # symbols per chunk
 
 # Create system config and save to file
 modulation_order = 16
@@ -68,6 +68,7 @@ config = SystemConfiguration(
     modulation_order=modulation_order,
     n_pilot_syms=1500,
     seed=123456,
+    carrier_frequency=8.5e9
 )
 config.sample_rate = fs
 config.sps = sps

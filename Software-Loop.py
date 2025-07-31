@@ -1,11 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-from tqdm import tqdm
-import time
-
-from comms_lib.pluto import Pluto
-from comms_lib.system import DigitalCommSystem
+from reedsolo import RSCodec
 
 def digital_modulation(bits):
     return 2 * bits.astype(np.float32) - 1
@@ -13,88 +9,109 @@ def digital_modulation(bits):
 def digital_demodulation(symbols):
     return (symbols > 0).astype(np.uint8)
 
-# SDR setup
-fs = int(10e6)
-sps = 1  # Speed over robustness
+def apply_noise(symbols, snr_db=20, burst_prob=0.1, burst_strength=5.0):
+    snr_linear = 10 ** (snr_db / 10)
+    signal_power = np.mean(symbols**2)
+    noise_power = signal_power / snr_linear
 
-tx = Pluto("usb:0.4.5")
-tx.tx_gain = 90
-rx = tx
-rx.rx_gain = 90
+    noise = np.random.normal(0, np.sqrt(noise_power), size=symbols.shape)
 
-tx.sample_rate = fs
-rx.sample_rate = fs
+    bursts = np.random.rand(*symbols.shape) < burst_prob
+    noise[bursts] += np.random.normal(0, burst_strength * np.sqrt(noise_power), size=np.count_nonzero(bursts))
 
-system = DigitalCommSystem()
-system.set_transmitter(tx)
-system.set_receiver(rx)
+    return symbols + noise
 
-# Load and resize image
+# Load image
 img = Image.open("knee.jpg").convert("RGB")
-img = img.resize((64, 64), Image.Resampling.LANCZOS)
 img_array_rgb = np.array(img)
-H, W, _ = img_array_rgb.shape
+original_shape = img_array_rgb.shape  # (H, W, 3)
 
-# Combine RGB channels into 1 stream
-flat_rgb = img_array_rgb.reshape(-1, 3).flatten()  # Interleaved R, G, B
-bits = np.unpackbits(flat_rgb, bitorder='big')
-symbols = digital_modulation(bits)
+# Reed-Solomon parameters
+rs = RSCodec(20)  # 20 parity bytes
+chunk_size_bytes = 235  # max message length with nsym=20 (<=255-nsym)
+chunk_size_bits = chunk_size_bytes * 8
 
-chunk_size = 8000
-received_symbols_chunks = []
+received_channels = []
+symbol_log = []
+received_symbol_log = []
 
-print("Transmitting combined RGB data...")
-start_time = time.time()
+for c in range(3):
+    channel = img_array_rgb[:, :, c]
+    flat_bytes = channel.flatten().astype(np.uint8)
 
-for i in tqdm(range(0, len(symbols), chunk_size), desc="Chunks"):
-    chunk = symbols[i:i + chunk_size]
-    system.transmit_signal(chunk)
+    # RS encode chunks
+    encoded_chunks = []
+    for i in range(0, len(flat_bytes), chunk_size_bytes):
+        chunk = flat_bytes[i:i+chunk_size_bytes]
+        encoded = rs.encode(chunk.tobytes())
+        encoded_chunks.append(np.frombuffer(encoded, dtype=np.uint8))
+    encoded_bytes = np.concatenate(encoded_chunks)
 
-    expected_samples = len(chunk) * sps
-    received_samples = np.array([], dtype=np.complex64)
-    attempts = 0
-    max_recv_attempts = 50
+    bits = np.unpackbits(encoded_bytes, bitorder='big')
+    symbols = digital_modulation(bits)
 
-    while len(received_samples) < expected_samples and attempts < max_recv_attempts:
-        new_samples = system.receive_signal()
-        received_samples = np.concatenate((received_samples, new_samples))
-        attempts += 1
+    if c == 0:
+        symbol_log.extend(symbols[:1000])
 
-    if len(received_samples) < expected_samples:
-        print(f"Warning: only received {len(received_samples)} samples, expected {expected_samples}")
+    # Transmit with noise chunk-wise
+    received_symbols_chunks = []
+    for i in range(0, len(symbols), chunk_size_bits):
+        sym_chunk = symbols[i:i+chunk_size_bits]
+        noisy_chunk = apply_noise(sym_chunk, snr_db=20, burst_prob=0.01, burst_strength=6)
+        received_symbols_chunks.append(noisy_chunk)
 
-    rx_chunk = received_samples[sps // 2 :: sps]
-    rx_chunk = rx_chunk[:len(chunk)]
-    received_symbols_chunks.append(rx_chunk)
+    received_symbols = np.concatenate(received_symbols_chunks)
 
-print(f"Transmission done in {time.time() - start_time:.2f} sec")
+    if c == 0:
+        received_symbol_log.extend(received_symbols[:1000])
 
-# Reconstruct full RGB array
-received_symbols = np.concatenate(received_symbols_chunks)
-received_bits = digital_demodulation(received_symbols)
-received_bits = received_bits[:len(bits)]  # Trim to original length
+    received_bits = digital_demodulation(received_symbols)
+    received_bits = received_bits[:len(bits)]
 
-received_bytes = np.packbits(received_bits, bitorder='big')
-if len(received_bytes) < flat_rgb.size:
-    padded = np.zeros(flat_rgb.size, dtype=np.uint8)
-    padded[:len(received_bytes)] = received_bytes
-    received_bytes = padded
-else:
-    received_bytes = received_bytes[:flat_rgb.size]
+    received_bytes = np.packbits(received_bits, bitorder='big')
 
-# Reshape into RGB image
-received_rgb = received_bytes.reshape(H, W, 3)
+    # RS decode chunk-wise
+    decoded_bytes = []
+    chunk_len = chunk_size_bytes + rs.nsym  # encoded chunk size in bytes
+    for i in range(0, len(received_bytes), chunk_len):
+        rs_chunk = received_bytes[i:i+chunk_len]
+        try:
+            decoded_chunk, _, errata_pos = rs.decode(rs_chunk.tobytes())
+            print(f"Channel {c}, chunk {i//chunk_len}: RS decode success, corrected errors: {len(errata_pos)}")
+        except Exception as e:
+            print(f"Channel {c}, chunk {i//chunk_len}: RS decode FAILED: {e}")
+            decoded_chunk = bytes([0]*chunk_size_bytes)
+        decoded_bytes.append(np.frombuffer(decoded_chunk, dtype=np.uint8))
 
-# Plot
-plt.figure(figsize=(10, 5))
+    recovered_channel_bytes = np.concatenate(decoded_bytes)[:len(flat_bytes)]
+    recovered_channel = recovered_channel_bytes.reshape(channel.shape)
+    received_channels.append(recovered_channel)
+
+received_rgb_array = np.stack(received_channels, axis=2)
+
+# Plot symbol amplitudes before and after transmission for first channel
+plt.figure(figsize=(10, 4))
+plt.plot(symbol_log, label="Original Symbols", alpha=0.7)
+plt.plot(received_symbol_log, label="Received Symbols", alpha=0.7, linestyle='dashed')
+plt.title("Symbol Amplitudes vs. Time (Channel 0, First 1000 Symbols)")
+plt.xlabel("Symbol Index")
+plt.ylabel("Amplitude")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# Plot original and received images
+plt.figure(figsize=(12, 6))
+
 plt.subplot(1, 2, 1)
-plt.title("Original Image")
+plt.title("Original Image (RGB)")
 plt.imshow(img_array_rgb)
 plt.axis("off")
 
 plt.subplot(1, 2, 2)
-plt.title("Received Image")
-plt.imshow(received_rgb)
+plt.title("Received Image (RGB) with RS Decoding")
+plt.imshow(received_rgb_array)
 plt.axis("off")
 
 plt.tight_layout()

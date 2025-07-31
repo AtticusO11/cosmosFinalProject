@@ -10,12 +10,12 @@ from comms_lib.pluto import Pluto
 from comms_lib.system import DigitalCommSystem
 
 def digital_modulation(bits):
-    return 2 * bits.astype(np.float32) - 1
+    return 2 * bits.astype(np.float32) - 1 #Maps bits {0, 1} to BPSK symbols {-1, 1}
 
 def digital_demodulation(symbols):
-    return (symbols > 0).astype(np.uint8)
+    return (symbols > 0).astype(np.uint8) #Demodulates bits into integer range {0, 255}
 
-# Flag image dictionary
+# Flag image dictionary: Accurately maps each flag to the country name for input ease
 flags_dict = {
     'albania': 'Flags/Albania.png',
     'andorra': 'Flags/Andorra.png',
@@ -67,62 +67,66 @@ flags_dict = {
 }
 
 # SDR setup
-fs = int(10e6)
-sps = 1
+fs = int(10e6) # Sampling frequency - 10 million samples per second(integer value)
+sps = 1 #Each sample is represented by exactly 1 symbol(Basic transmission unit)
 
-pluto = Pluto("usb:1.4.5")
-pluto.tx_gain = 90
-pluto.rx_gain = 90
-pluto.sample_rate = fs
+pluto = Pluto("usb:1.4.5") #Accurately identifies the Pluto SDR we will use by usb id
+pluto.tx_gain = 90 #Controls how much the signal is amplified before being sent over-air
+pluto.rx_gain = 90 #Does the same as above, but for the image being received by the computer from the SDR
+pluto.sample_rate = fs #Sets the rate of sampling of the pluto SDR equal to the predetermined sampling frequency
+pluto.tx_lo = int(850e6) #Set carrier frequency to 850 MHz
+pluto.rx_lo = int(850e6)
 
 system = DigitalCommSystem()
-system.set_transmitter(pluto)
+
+#Sets the transmitter and receiver of the system as the Pluto SDR
+system.set_transmitter(pluto) 
 system.set_receiver(pluto)
 
-print("What country in Europe do you want to visit? (Even Number, click enter):")
+print("What country in Europe do you want to visit? click enter: ") #Fundamental input
 
 while True:
-    name = input("> ").strip().lower()
-    if name == "":
+    name = input("> ").strip().lower() #Converts to lowercase
+    if name == "": #End code if enter button pressed
         break
     
     if name in flags_dict:
-        img_path = flags_dict[name]
+        img_path = flags_dict[name] #Set the image path to the associated country in the image dictionary
 
         if not os.path.exists(img_path):
             print(f"Image file not found for {name}")
             continue
 
-        img = Image.open(img_path).convert("RGB")
-        img = img.resize((32, 32), Image.Resampling.LANCZOS)
-        img_array_rgb = np.array(img)
-        H, W, _ = img_array_rgb.shape
+        img = Image.open(img_path).convert("RGB") #Opens the image and ensures full color
+        img = img.resize((16, 16), Image.Resampling.LANCZOS) #Resizes the image to 16x16 to ensure speed
+        img_array_rgb = np.array(img) #Converts the image into an array of usable data
+        H, W, _ = img_array_rgb.shape #Extracts the height(pixels), width(pixels), and number of color channels in the image
 
         # Combine RGB channels
-        flat_rgb = img_array_rgb.reshape(-1, 3).flatten()
-        bits = np.unpackbits(flat_rgb, bitorder='big')
-        symbols = digital_modulation(bits)
+        flat_rgb = img_array_rgb.reshape(-1, 3).flatten() #Turns image data into a 1d array of 
+        bits = np.unpackbits(flat_rgb, bitorder='big')#Converts each byte into its 8-bit binary representation
+        symbols = digital_modulation(bits) #Performs digital modulation to convert bits to symbols
 
-        chunk_size = 4000
-        received_chunks = []
+        chunk_size = 4000 #Sets a chunk size
+        received_chunks = []#Creates an empty list of received chunks
 
         print(f"Transmitting image of {name}...")
         print(f"Number of symbols: {symbols}")
         start_time = time.time()
 
-        for i in tqdm(range(0, len(symbols), chunk_size), desc="Chunks"):
-            chunk = symbols[i:i + chunk_size]
-            system.transmit_signal(chunk)
+        for i in tqdm(range(0, len(symbols), chunk_size), desc="Chunks"): #For loop to send over all chunks
+            chunk = symbols[i:i + chunk_size]#Divides the image(represented in symbols) in chunks to send over one-by-one
+            system.transmit_signal(chunk) #Transmits a signal in the form of a chunk
 
-            expected = len(chunk) * sps
-            received = np.array([], dtype=np.complex64)
-            attempts = 0
-            while len(received) < expected and attempts < 50:
+            expected = len(chunk) * sps #Calculates how many symbols expected to receive
+            received = np.array([], dtype=np.complex64) #Creates numpy array of received data
+            attempts = 0 #Calculates how many times you've tried to send enough signals to SDR
+            while len(received) < expected and attempts < 50: #A loop that combines all signals
                 received = np.concatenate((received, system.receive_signal()))
-                attempts += 1
+                attempts += 1 #Gradually adds an attempt
 
-            rx_chunk = received[sps // 2 :: sps][:len(chunk)]
-            received_chunks.append(rx_chunk)
+            rx_chunk = received[sps // 2 :: sps][:len(chunk)] #Extracts chunks from signal
+            received_chunks.append(rx_chunk) #Cmobines all chunk sizes
 
         print(f"Transmission done in {time.time() - start_time:.2f} sec")
 
@@ -138,16 +142,16 @@ while True:
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
-        plt.show()
+        plt.show() #Prints graph of transmitted vs. received symbols
 
-        received_bits = digital_demodulation(received_symbols)[:len(bits)]
-        received_bytes = np.packbits(received_bits, bitorder='big')
-        if len(received_bytes) < flat_rgb.size:
+        received_bits = digital_demodulation(received_symbols)[:len(bits)] #Demodulate bits within the chunks
+        received_bytes = np.packbits(received_bits, bitorder='big') 
+        if len(received_bytes) < flat_rgb.size: #Math logic to ensure that enough bits are sent per chunk using padding
             padded = np.zeros(flat_rgb.size, dtype=np.uint8)
             padded[:len(received_bytes)] = received_bytes
             received_bytes = padded
 
-        received_rgb = received_bytes.reshape(H, W, 3)
+        received_rgb = received_bytes.reshape(H, W, 3) #Reshape bits to image
 
         # Show both images
         plt.figure(figsize=(10, 5))

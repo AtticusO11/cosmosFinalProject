@@ -1,83 +1,100 @@
-# %%
-import matplotlib.pyplot as plt
 import numpy as np
+import matplotlib.pyplot as plt
 from PIL import Image
+from tqdm import tqdm
+import time
 
 from comms_lib.pluto import Pluto
 from comms_lib.system import DigitalCommSystem
 
-# ---------------------------------------------------------------
-# Digital communication system parameters.
-# ---------------------------------------------------------------
-fs = 10e6
-ts = 1 / fs
-sps = 3
-T = ts * sps
+def digital_modulation(bits):
+    return 2 * bits.astype(np.float32) - 1
 
-# ---------------------------------------------------------------
-# Initialize transmitter and receiver.
-# ---------------------------------------------------------------
-tx = Pluto("usb:7.5.5")
+def digital_demodulation(symbols):
+    return (symbols > 0).astype(np.uint8)
+
+# SDR setup
+fs = int(10e6)
+sps = 1  # Speed over robustness
+
+tx = Pluto("usb:0.4.5")
 tx.tx_gain = 90
-
-rx = Pluto("usb:7.6.5")
+rx = tx
 rx.rx_gain = 90
 
-# ---------------------------------------------------------------
-# Initialize digital communication system.
-# ---------------------------------------------------------------
+tx.sample_rate = fs
+rx.sample_rate = fs
+
 system = DigitalCommSystem()
 system.set_transmitter(tx)
 system.set_receiver(rx)
 
-# ---------------------------------------------------------------
-# Load image and convert to bitstream
-# ---------------------------------------------------------------
-img = Image.open("Teachers/Ethan_Ge.jpg").convert("L")  # grayscale
-img_array = np.array(img)
-original_shape = img_array.shape
+# Load and resize image
+img = Image.open("knee.jpg").convert("RGB")
+img = img.resize((64, 64), Image.Resampling.LANCZOS)
+img_array_rgb = np.array(img)
+H, W, _ = img_array_rgb.shape
 
-# Convert to bits
-flat_img = img_array.flatten()
-bits = np.unpackbits(flat_img.astype(np.uint8))
+# Combine RGB channels into 1 stream
+flat_rgb = img_array_rgb.reshape(-1, 3).flatten()  # Interleaved R, G, B
+bits = np.unpackbits(flat_rgb, bitorder='big')
+symbols = digital_modulation(bits)
 
-# Modulate bits to BPSK: 0 -> -1, 1 -> +1
-symbols = 2 * bits - 1
+chunk_size = 8000
+received_symbols_chunks = []
 
-# ---------------------------------------------------------------
-# Chunked transmission
-# ---------------------------------------------------------------
-chunk_size = 8000  # max ~10,000 samples
-received_symbols = []
+print("Transmitting combined RGB data...")
+start_time = time.time()
 
-for i in range(0, len(symbols), chunk_size):
-    chunk = symbols[i:i + chunk_size].astype(np.float32)
+for i in tqdm(range(0, len(symbols), chunk_size), desc="Chunks"):
+    chunk = symbols[i:i + chunk_size]
     system.transmit_signal(chunk)
-    rx_chunk = system.receive_signal()
-    rx_chunk = rx_chunk[sps // 2 :: sps]  # symbol sampling
-    received_symbols.append(rx_chunk[:len(chunk)])  # trim to match
 
-received_symbols = np.concatenate(received_symbols)
+    expected_samples = len(chunk) * sps
+    received_samples = np.array([], dtype=np.complex64)
+    attempts = 0
+    max_recv_attempts = 50
 
-# Demodulate: real > 0 → 1, else 0
-received_bits = (np.real(received_symbols) > 0).astype(np.uint8)
+    while len(received_samples) < expected_samples and attempts < max_recv_attempts:
+        new_samples = system.receive_signal()
+        received_samples = np.concatenate((received_samples, new_samples))
+        attempts += 1
 
-# Convert back to image
-received_bytes = np.packbits(received_bits[: len(flat_img) * 8])
-received_img_array = received_bytes.reshape(original_shape)
+    if len(received_samples) < expected_samples:
+        print(f"Warning: only received {len(received_samples)} samples, expected {expected_samples}")
 
-# ---------------------------------------------------------------
-# Plot original and received image
-# ---------------------------------------------------------------
+    rx_chunk = received_samples[sps // 2 :: sps]
+    rx_chunk = rx_chunk[:len(chunk)]
+    received_symbols_chunks.append(rx_chunk)
+
+print(f"Transmission done in {time.time() - start_time:.2f} sec")
+
+# Reconstruct full RGB array
+received_symbols = np.concatenate(received_symbols_chunks)
+received_bits = digital_demodulation(received_symbols)
+received_bits = received_bits[:len(bits)]  # Trim to original length
+
+received_bytes = np.packbits(received_bits, bitorder='big')
+if len(received_bytes) < flat_rgb.size:
+    padded = np.zeros(flat_rgb.size, dtype=np.uint8)
+    padded[:len(received_bytes)] = received_bytes
+    received_bytes = padded
+else:
+    received_bytes = received_bytes[:flat_rgb.size]
+
+# Reshape into RGB image
+received_rgb = received_bytes.reshape(H, W, 3)
+
+# Plot
 plt.figure(figsize=(10, 5))
 plt.subplot(1, 2, 1)
-plt.imshow(img_array, cmap="gray")
 plt.title("Original Image")
+plt.imshow(img_array_rgb)
 plt.axis("off")
 
 plt.subplot(1, 2, 2)
-plt.imshow(received_img_array, cmap="gray")
 plt.title("Received Image")
+plt.imshow(received_rgb)
 plt.axis("off")
 
 plt.tight_layout()
